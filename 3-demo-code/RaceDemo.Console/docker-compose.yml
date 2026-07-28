@@ -1,0 +1,13 @@
+# Same SQL Server as the API demo project — if you already have that container
+# running, you do not need this one. The console demo uses its own database
+# (RaceDemoConsole) so the two projects never touch the same row.
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: race-demo-sql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Your_Strong!Passw0rd"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
