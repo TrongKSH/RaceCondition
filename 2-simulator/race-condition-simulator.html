@@ -1,0 +1,1239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Race Conditions in EF Core + SQL Server — Interactive Simulator</title>
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#131a26; --panel2:#0f151f; --line:#233046;
+    --txt:#e6edf7; --dim:#8ea1bd; --cyan:#38bdf8; --grn:#4ade80;
+    --red:#f87171; --amb:#fbbf24; --vio:#c084fc;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--cyan)}
+  .wrap{max-width:1260px;margin:0 auto;padding:18px 22px 80px}
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px}
+  h1{font-size:22px;margin:0;letter-spacing:-.4px}
+  .sub{color:var(--dim);font-size:13.5px}
+  nav{display:flex;gap:6px;margin:16px 0 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--dim);
+    padding:9px 15px;font-size:14px;font-weight:600;cursor:pointer;border-radius:6px 6px 0 0}
+  nav button:hover{color:var(--txt);background:#ffffff08}
+  nav button.on{color:var(--cyan);border-bottom-color:var(--cyan)}
+  .pane{display:none} .pane.on{display:block}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .muted{color:var(--dim)} .mono{font-family:var(--mono)}
+
+  /* ---------- controls ---------- */
+  .ctl{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-bottom:14px}
+  select,input[type=number]{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    border-radius:8px;padding:8px 11px;font-size:14px;font-family:inherit}
+  button.btn{background:var(--cyan);color:#04121c;border:0;border-radius:8px;padding:9px 18px;
+    font-size:14px;font-weight:700;cursor:pointer}
+  button.btn:hover{filter:brightness(1.12)}
+  button.btn:disabled{opacity:.32;cursor:not-allowed}
+  button.ghost{background:transparent;color:var(--txt);border:1px solid var(--line)}
+  button.tog{background:transparent;color:var(--dim);border:1px solid var(--line);border-radius:8px;
+    padding:7px 13px;font-size:12.5px;font-weight:600;cursor:pointer}
+  button.tog.on{color:var(--cyan);border-color:var(--cyan);background:#38bdf812}
+  .kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-radius:4px;
+    padding:1px 5px;color:var(--dim)}
+
+  /* ---------- narration ---------- */
+  .narr{background:linear-gradient(180deg,#18202f,#121a27);border:1px solid var(--line);
+        border-radius:12px;padding:15px 18px;margin-bottom:12px;min-height:96px}
+  .narr .stepno{font:700 11px var(--mono);letter-spacing:1.4px;color:var(--cyan);
+                text-transform:uppercase;margin-bottom:6px}
+  .narr .say{font-size:20px;line-height:1.42;font-weight:600}
+  .narr .why{font-size:14px;color:var(--dim);margin-top:8px}
+  .narr .why b{color:var(--amb);font-weight:600}
+
+  .cue{background:#c084fc0f;border:1px dashed var(--vio);border-radius:10px;
+       padding:10px 14px;margin-bottom:12px;font-size:13.5px;color:#e2d4f7}
+  .cue b{color:var(--vio)}
+
+  .sqlbox{background:#070b12;border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+          font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;margin-bottom:12px;
+          overflow-x:auto}
+  .sqlbox .hl{color:var(--amb);font-weight:700}
+  .sqlbox .g{color:var(--grn)} .sqlbox .r{color:var(--red)} .sqlbox .c{color:#5f7290}
+
+  /* ---------- scoreboard ---------- */
+  .score{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+  .sc{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+  .sc .l{font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim)}
+  .sc .v{font:800 25px/1.2 var(--mono);margin-top:3px}
+  .sc.bad{border-color:var(--red);background:#f8717110}
+  .sc.good{border-color:var(--grn);background:#4ade8010}
+
+  /* ---------- sequence diagram ---------- */
+  .heads{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:6px;
+         position:sticky;top:0;background:var(--bg);padding:6px 0 8px;z-index:6}
+  .hd{border:1px solid var(--line);border-radius:11px;padding:10px 12px;background:var(--panel)}
+  .hd.db{background:linear-gradient(180deg,#172233,#111a28);border-color:#31456a}
+  .hd .t{font-size:13.5px;font-weight:700}
+  .hd .t small{font-weight:400;color:var(--dim);font-size:11.5px;display:block;margin-top:1px}
+  .hd .h{font-family:var(--mono);font-size:19px;font-weight:800;margin-top:6px}
+  .hd .tag{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.7px;padding:2px 7px;
+           border-radius:999px;border:1px solid;margin-left:6px;vertical-align:2px;
+           font-family:-apple-system,sans-serif}
+  .t-stale{color:var(--red);border-color:var(--red)}
+  .t-lock{color:var(--vio);border-color:var(--vio)}
+  .t-wait{color:var(--amb);border-color:var(--amb)}
+  .t-ok{color:var(--grn);border-color:var(--grn)}
+
+  .seq{position:relative;min-height:120px;padding:8px 0 4px}
+  .rails{position:absolute;inset:0;display:grid;grid-template-columns:repeat(3,1fr);pointer-events:none}
+  .rails i{justify-self:center;width:0;border-left:2px dashed #223350}
+  .rails i.mid{border-left-color:#33507f}
+
+  .srow{display:grid;grid-template-columns:repeat(3,1fr);align-items:center;
+        position:relative;z-index:2;padding:9px 0;opacity:.45;transition:opacity .25s}
+  .srow.seen{opacity:.62}
+  .srow.now{opacity:1}
+  .srow.now .ar .ln{box-shadow:0 0 12px currentColor}
+
+  .ar{position:relative;margin:0 25%}
+  .ar .lbl{display:block;text-align:center;font:600 12px/1.3 var(--mono);margin-bottom:6px;
+           color:var(--txt)}
+  .ar .ln{height:2px;border-radius:2px;background:currentColor;position:relative}
+  .ar .val{display:block;text-align:center;font:700 12.5px var(--mono);margin-top:6px}
+  .ar.right .ln::after{content:'';position:absolute;right:-2px;top:-5px;width:0;height:0;
+    border:6px solid transparent;border-left-color:currentColor}
+  .ar.left .ln::before{content:'';position:absolute;left:-2px;top:-5px;width:0;height:0;
+    border:6px solid transparent;border-right-color:currentColor}
+  .ar.stop .ln{background:repeating-linear-gradient(90deg,currentColor 0 7px,transparent 7px 13px)}
+  .ar.stop .ln::before{content:'';position:absolute;left:-2px;top:-9px;width:4px;height:20px;
+    background:currentColor;border-radius:2px}
+
+  .think{justify-self:center;width:90%;border:1px dashed;border-radius:10px;padding:9px 12px;
+         font-size:12.5px;text-align:center;background:#0f1622}
+  .think .k{display:block;font:700 10px var(--mono);letter-spacing:1px;text-transform:uppercase;
+            opacity:.85;margin-bottom:4px}
+
+  .banner{grid-column:1/4;border-radius:11px;padding:13px 16px;font-size:14.5px;text-align:center}
+  .b-bad{background:#f8717114;border:1px solid var(--red);color:#ffd9d9}
+  .b-ok{background:#4ade8012;border:1px solid var(--grn);color:#d6ffe4}
+  .banner b{font-size:16px}
+
+  /* the Flexcoin swarm */
+  .swarm{grid-column:1/4;background:#0f1622;border:1px solid var(--line);border-radius:11px;
+         padding:12px 15px}
+  .swarm .cap{font:600 12.5px var(--mono);color:var(--txt)}
+  .swarm .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:10px}
+  .swarm .chip{width:14px;height:14px;border-radius:3px;background:#1e293b;
+               transition:background .4s ease, transform .4s ease}
+  .swarm .chip.read{background:var(--cyan)}
+  .swarm .chip.ok{background:var(--amb)}
+  .swarm .chip.done{background:var(--red);transform:scale(1.12)}
+  .swarm .foot{font-size:12px;color:var(--dim);margin-top:9px}
+
+  .verdict{margin-top:14px;border-radius:12px;padding:15px 17px;font-size:15px;line-height:1.6}
+  .v-bad{background:#f8717115;border:1px solid var(--red)}
+  .v-ok{background:#4ade8012;border:1px solid var(--grn)}
+
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin:10px 0 2px}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .legend i{width:22px;height:2px;border-radius:2px;display:inline-block}
+
+  /* ---------- shared content ---------- */
+  .inc{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-bottom:26px}
+  .inc-h{padding:16px 18px;background:linear-gradient(90deg,#1b2436,#131a26)}
+  .inc-h h2{margin:0 0 4px;font-size:19px}
+  .inc-b{padding:18px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .steps{list-style:none;padding:0;margin:0;counter-reset:s}
+  .steps li{counter-increment:s;position:relative;padding:9px 0 9px 40px;
+            border-bottom:1px dashed #1e293b;font-size:14px}
+  .steps li:last-child{border-bottom:0}
+  .steps li::before{content:counter(s);position:absolute;left:0;top:8px;width:26px;height:26px;
+    border-radius:50%;background:#1e293b;color:var(--cyan);font-family:var(--mono);font-size:12px;
+    font-weight:700;display:flex;align-items:center;justify-content:center}
+  .steps li.crit::before{background:#f8717120;color:var(--red);border:1px solid var(--red)}
+  pre{background:#070b12;border:1px solid var(--line);border-radius:9px;padding:13px;
+      font-family:var(--mono);font-size:12.5px;overflow-x:auto;margin:0;line-height:1.5}
+  pre .k{color:#c084fc} pre .s{color:#7dd3fc} pre .c{color:#5f7290}
+  pre .r{color:var(--red)} pre .g{color:var(--grn)}
+  .stat{display:flex;gap:26px;flex-wrap:wrap;margin:14px 0}
+  .stat div .n{font-size:26px;font-weight:800;font-family:var(--mono)}
+  .stat div .l{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.9px}
+  .dots{display:flex;flex-wrap:wrap;gap:5px;margin:14px 0}
+  .dot{width:17px;height:17px;border-radius:4px;background:#1e293b}
+  .dot.ok{background:var(--grn)} .dot.cf{background:var(--amb)} .dot.rj{background:#475569}
+  .bars{display:grid;grid-template-columns:150px 1fr 90px;gap:9px;align-items:center;font-size:13px}
+  .bar{height:22px;border-radius:5px;background:#1e293b;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:5px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-size:11px;letter-spacing:.9px;text-transform:uppercase;font-weight:700}
+  td.good{color:var(--grn)} td.bad{color:var(--red)}
+  .note{font-size:13px;color:var(--dim);margin-top:9px}
+  details{margin-top:14px}
+  summary{cursor:pointer;color:var(--cyan);font-size:13.5px;font-weight:600;padding:6px 0}
+
+  @media(max-width:900px){.grid2{grid-template-columns:1fr}.score{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Race Conditions in EF&nbsp;Core + SQL&nbsp;Server</h1>
+  <span class="sub">Watch two requests share one row — and watch money appear from nowhere</span>
+</header>
+
+<nav>
+  <button class="on" data-p="sim">1 · Watch it happen</button>
+  <button data-p="inc">2 · Real incidents</button>
+  <button data-p="dec">3 · Which fix?</button>
+  <button data-p="load">4 · Scale it up</button>
+</nav>
+
+<!-- ==================== 1 · SIMULATOR ==================== -->
+<section class="pane on" id="sim">
+
+  <div class="ctl">
+    <select id="mode">
+      <option value="vulnerable">❌ Broken — the code we all write</option>
+      <option value="optimistic">✅ Fix 1 — Optimistic (RowVersion)</option>
+      <option value="pessimistic">✅ Fix 2 — Pessimistic (UPDLOCK)</option>
+      <option value="atomic">✅ Fix 3 — Atomic (one UPDATE)</option>
+    </select>
+    <button class="btn" id="step">Next step ▸</button>
+    <button class="btn ghost" id="play">Auto-play</button>
+    <button class="btn ghost" id="reset">Start over</button>
+    <button class="tog" id="tSql">Show SQL</button>
+    <button class="tog" id="tCue" style="display:none">Presenter cues</button>
+    <span class="muted" style="font-size:12.5px">
+      <span class="kbd">Space</span> next · <span class="kbd">R</span> restart · <span id="counter">0 / 0</span>
+    </span>
+  </div>
+
+  <div class="narr">
+    <div class="stepno" id="stepno">The setup</div>
+    <div class="say" id="say">—</div>
+    <div class="why" id="why"></div>
+  </div>
+
+  <div class="cue" id="cue"></div>
+  <div class="sqlbox" id="sqlbox" style="display:none"></div>
+
+  <div class="score">
+    <div class="sc"><div class="l">Wallet started with</div><div class="v" id="scStart">$100</div></div>
+    <div class="sc" id="scPaidBox"><div class="l">Cash handed to Alice</div><div class="v" id="scPaid">$0</div></div>
+    <div class="sc"><div class="l">Balance in the database</div><div class="v" id="scDb">$100</div></div>
+    <div class="sc" id="scGapBox"><div class="l">Money from nowhere</div><div class="v" id="scGap">$0</div></div>
+  </div>
+
+  <div class="legend">
+    <span><i style="background:var(--cyan)"></i> Request A acts</span>
+    <span><i style="background:var(--vio)"></i> Request B acts</span>
+    <span><i style="background:var(--grn)"></i> money actually moves</span>
+    <span><i style="background:var(--amb)"></i> blocked or rejected</span>
+    <span>arrows point in the direction data travels · time runs downward ↓</span>
+  </div>
+
+  <div class="heads">
+    <div class="hd">
+      <div class="t">Request A <small>Alice's phone · withdraw $100</small></div>
+      <div class="h" id="hA">not started</div>
+    </div>
+    <div class="hd db">
+      <div class="t">SQL Server <small>dbo.Wallets — the one true row</small></div>
+      <div class="h" id="hD">$100.00</div>
+    </div>
+    <div class="hd">
+      <div class="t">Request B <small>Alice's laptop · withdraw $100</small></div>
+      <div class="h" id="hB">not started</div>
+    </div>
+  </div>
+
+  <div class="seq">
+    <div class="rails"><i></i><i class="mid"></i><i></i></div>
+    <div id="rows"></div>
+  </div>
+
+  <div id="verdict"></div>
+</section>
+
+<!-- ==================== 2 · REAL INCIDENTS ==================== -->
+<section class="pane" id="inc">
+
+  <!-- ---------------- STARBUCKS ---------------- -->
+  <div class="inc">
+    <div class="inc-h">
+      <h2>☕ Starbucks gift cards — May 2015</h2>
+      <div class="sub">Egor Homakov (Sakurity) · total cost of the exploit: three $5 cards and two browser windows</div>
+    </div>
+    <div class="inc-b">
+
+      <div class="ctl">
+        <button class="btn" id="sb-step">Next step ▸</button>
+        <button class="btn ghost" id="sb-play">Auto-play</button>
+        <button class="btn ghost" id="sb-reset">Start over</button>
+        <span class="muted" style="font-size:12.5px">step <span id="sb-cnt">0 / 0</span></span>
+      </div>
+
+      <div class="narr">
+        <div class="stepno" id="sb-no">The setup</div>
+        <div class="say" id="sb-say">—</div>
+        <div class="why" id="sb-why"></div>
+      </div>
+
+      <div class="score" id="sb-score"></div>
+
+      <div class="heads">
+        <div class="hd">
+          <div class="t">Browser 1 <small>transfer $5 · card 1 → card 2</small></div>
+          <div class="h" id="sb-hA">not started</div>
+        </div>
+        <div class="hd db">
+          <div class="t">Starbucks server <small>the two card balances</small></div>
+          <div class="h" id="sb-hM">$5.00 / $5.00</div>
+        </div>
+        <div class="hd">
+          <div class="t">Browser 2 <small>same transfer, same moment</small></div>
+          <div class="h" id="sb-hB">not started</div>
+        </div>
+      </div>
+
+      <div class="seq">
+        <div class="rails"><i></i><i class="mid"></i><i></i></div>
+        <div id="sb-rows"></div>
+      </div>
+
+      <div id="sb-verdict"></div>
+
+      <details>
+        <summary>Show the server code that made this possible</summary>
+<pre><span class="c">// The intent is sequential. The runtime is not.</span>
+<span class="k">public async Task</span> Transfer(<span class="k">int</span> from, <span class="k">int</span> to, <span class="k">decimal</span> amt)
+{
+    <span class="k">var</span> a = <span class="k">await</span> db.Cards.FirstAsync(c =&gt; c.Id == from);
+    <span class="k">var</span> b = <span class="k">await</span> db.Cards.FirstAsync(c =&gt; c.Id == to);
+
+    <span class="r">if (a.Balance &lt; amt) return Fail();</span>   <span class="c">// ← stale read, both requests pass</span>
+
+    b.Balance += amt;   <span class="c">// credit</span>
+    a.Balance -= amt;   <span class="c">// debit</span>
+
+    <span class="k">await</span> db.SaveChangesAsync();
+    <span class="c">// UPDATE Cards SET Balance=@p WHERE Id=@id  ← last writer wins</span>
+}</pre>
+        <div class="note">Reported 23 March, first reply 29 April. Starbucks' public response
+        used the words "fraudulent activity". Reproduce it in the demo project:</div>
+<pre><span class="c"># prints systemTotalAfter = 15.00 from a system that had 10.00</span>
+curl -X POST <span class="s">"localhost:5080/api/demo/starbucks?mode=vulnerable"</span></pre>
+      </details>
+    </div>
+  </div>
+
+  <!-- ---------------- FLEXCOIN ---------------- -->
+  <div class="inc">
+    <div class="inc-h">
+      <h2>₿ Flexcoin — 2 March 2014</h2>
+      <div class="sub">"The Bitcoin Bank" · same bug class, terminal outcome · company dead in 48 hours</div>
+    </div>
+    <div class="inc-b">
+
+      <div class="ctl">
+        <button class="btn" id="fx-step">Next step ▸</button>
+        <button class="btn ghost" id="fx-play">Auto-play</button>
+        <button class="btn ghost" id="fx-reset">Start over</button>
+        <span class="muted" style="font-size:12.5px">step <span id="fx-cnt">0 / 0</span></span>
+      </div>
+
+      <div class="narr">
+        <div class="stepno" id="fx-no">The setup</div>
+        <div class="say" id="fx-say">—</div>
+        <div class="why" id="fx-why"></div>
+      </div>
+
+      <div class="score" id="fx-score"></div>
+
+      <div class="heads">
+        <div class="hd">
+          <div class="t">The attacker <small>one funded account</small></div>
+          <div class="h" id="fx-hA">100 BTC</div>
+        </div>
+        <div class="hd db">
+          <div class="t">Flexcoin ledger <small>source account balance</small></div>
+          <div class="h" id="fx-hM">100 BTC</div>
+        </div>
+        <div class="hd">
+          <div class="t">Destination <small>where the coins pile up</small></div>
+          <div class="h" id="fx-hB">0 BTC</div>
+        </div>
+      </div>
+
+      <div class="seq">
+        <div class="rails"><i></i><i class="mid"></i><i></i></div>
+        <div id="fx-rows"></div>
+      </div>
+
+      <div id="fx-verdict"></div>
+
+      <details>
+        <summary>Why “we wrapped it in a transaction” didn't save them</summary>
+<pre><span class="c">// This looks safe in code review. It is not.</span>
+<span class="k">using var</span> tx = db.Database.BeginTransaction();
+
+<span class="k">var</span> w = <span class="k">await</span> db.Wallets.FirstAsync(x =&gt; x.Id == id);
+<span class="r">if (w.Balance &lt; amt) return Fail();</span>
+
+w.Balance -= amt;
+<span class="k">await</span> db.SaveChangesAsync();
+tx.Commit();
+
+<span class="c">// READ COMMITTED gives you ATOMICITY, not ISOLATION.</span>
+<span class="c">// A plain SELECT takes a shared lock and RELEASES it immediately.</span>
+<span class="c">// Request #2 reads the old balance perfectly happily.</span>
+<span class="c">// You need a token in the WHERE clause, or UPDLOCK.</span></pre>
+      </details>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>The line to land with the room:</b> neither of these was a clever attack. Both were the
+    ordinary <span class="mono">read → check → write</span> pattern that every one of us has
+    shipped, hit by more than one request at a time. Starbucks lost pocket change and some
+    reputation. Flexcoin lost the company.
+  </div>
+</section>
+
+<!-- ==================== 3 · WHICH FIX ==================== -->
+<section class="pane" id="dec">
+  <div class="card" style="margin-bottom:18px">
+    <table>
+      <tr><th>Strategy</th><th>How it works</th><th>Cost</th><th>Reach for it when</th></tr>
+      <tr>
+        <td><b>Optimistic</b><br><span class="mono muted" style="font-size:12px">byte[] RowVersion</span></td>
+        <td>SQL Server bumps an 8-byte <span class="mono">rowversion</span> on every UPDATE.
+            EF Core adds <span class="mono">AND RowVersion = @original</span> to the WHERE clause.
+            0 rows affected → <span class="mono">DbUpdateConcurrencyException</span>.</td>
+        <td class="good">Free until a collision happens</td>
+        <td>Contention is <b>rare</b>. Human-paced edits, admin screens, ordinary CRUD — anything where a 409 is a fair answer.</td>
+      </tr>
+      <tr>
+        <td><b>Optimistic + retry</b></td>
+        <td>Same, wrapped in a bounded loop that <b>re-reads and re-validates</b> before trying again. Jittered backoff.</td>
+        <td class="good">A few extra round trips under load</td>
+        <td>The caller shouldn't see a 409 and the operation is safe to recompute from fresh state.</td>
+      </tr>
+      <tr>
+        <td><b>Pessimistic</b><br><span class="mono muted" style="font-size:12px">WITH (UPDLOCK, ROWLOCK)</span></td>
+        <td>Takes an Update lock at SELECT time inside an explicit transaction. The second request <b>blocks</b> rather than reading stale data.</td>
+        <td class="bad">Serialises the row; throughput ceiling; deadlock risk</td>
+        <td>Contention is <b>high</b>, or retrying is expensive/illegal — charging a card, moving money, allocating the last seat.</td>
+      </tr>
+      <tr>
+        <td><b>Atomic UPDATE</b><br><span class="mono muted" style="font-size:12px">ExecuteUpdateAsync</span></td>
+        <td><span class="mono">SET Balance = Balance - @x WHERE Id = @id AND Balance &gt;= @x</span>. One statement, so there is no window between read and write at all.</td>
+        <td class="good">Cheapest of all — one round trip</td>
+        <td>The new value is a pure function of the old one. <b>If this fits, use it.</b></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h3 style="margin:0 0 10px;color:var(--grn)">Ask these three questions</h3>
+      <ol class="steps">
+        <li>Can I express the whole thing as <b>one UPDATE</b> whose WHERE clause carries the business rule? → do that.</li>
+        <li>If not: is a <b>retry acceptable</b> for this operation? → optimistic + RowVersion.</li>
+        <li>If not: take the lock. → <span class="mono">UPDLOCK</span> in a short transaction, and measure the throughput cost.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3 style="margin:0 0 10px;color:var(--red)">Things that look like fixes and aren't</h3>
+      <ol class="steps">
+        <li class="crit"><b>BeginTransaction() with no lock hint.</b> READ COMMITTED gives atomicity, not isolation. Both requests still read the old value. The most common false fix in code review.</li>
+        <li class="crit"><b>C# <span class="mono">lock</span> / <span class="mono">SemaphoreSlim</span>.</b> Works on one process. Silently stops working the day you scale to two pods.</li>
+        <li class="crit"><b>Retrying without re-reading.</b> Catching <span class="mono">DbUpdateConcurrencyException</span> and calling SaveChanges again rebuilds the original bug with extra steps.</li>
+        <li class="crit"><b>"It's never happened in prod."</b> A lost update raises no exception and writes no log. Absence of alerts is not evidence of absence.</li>
+        <li><b>Serializable everywhere.</b> It does work, and it will flood you with deadlocks. Deliberate choice, not a default.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 4 · SCALE IT UP ==================== -->
+<section class="pane" id="load">
+  <div class="card" style="margin-bottom:16px">
+    Tab 1 shows two requests. Here are twenty. This is a real discrete-event simulation, not a
+    canned animation — each request gets a random read time and write time, and whether it wins
+    depends on who committed in between, exactly like the .NET demo project.
+  </div>
+  <div class="ctl">
+    <label class="muted">Concurrent requests <input type="number" id="n" value="20" min="2" max="200" style="width:88px"></label>
+    <label class="muted">Starting balance <input type="number" id="start" value="1000" step="100" style="width:104px"></label>
+    <label class="muted">Amount each <input type="number" id="amt" value="100" step="10" style="width:88px"></label>
+    <button class="btn" id="run">Run all five modes</button>
+  </div>
+  <div id="results"></div>
+</section>
+
+</div>
+
+<script>
+/* ======================================================================
+   TABS
+   ====================================================================== */
+document.querySelectorAll('nav button').forEach(function(b){
+  b.onclick = function(){
+    document.querySelectorAll('nav button').forEach(function(x){ x.classList.remove('on'); });
+    document.querySelectorAll('.pane').forEach(function(x){ x.classList.remove('on'); });
+    b.classList.add('on');
+    document.getElementById(b.dataset.p).classList.add('on');
+  };
+});
+
+var money = function(n){ return (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2); };
+var btc   = function(n){ return n.toLocaleString('en-US') + ' BTC'; };
+var START = 100;
+
+/* Presenter cues are built and working, but the toggle button is hidden for
+   now. Set SHOW_CUE_BUTTON to true to bring it back — or just press "C" at any
+   time to toggle the cue line on and off. */
+var SHOW_CUE_BUTTON = false;
+
+/* SQL Server's rowversion is an 8-byte value, database-wide monotonic, that the
+   engine bumps on every UPDATE of the row. Shown truncated so it stays readable
+   on a projector — the full value looks like 0x00000000000007D1. */
+var RV1 = '0x…07D1', RV2 = '0x…07D2';
+
+function S(db, a, b, paid, extra){
+  var o = { db:db, a:a, b:b, paid:paid, aTag:null, bTag:null, lock:null,
+            ver:null, aVer:null, bVer:null };
+  for (var k in (extra || {})) o[k] = extra[k];
+  return o;
+}
+
+var COLORS = { cyan:'var(--cyan)', vio:'var(--vio)', grn:'var(--grn)',
+               red:'var(--red)', amb:'var(--amb)' };
+var el = function(id){ return document.getElementById(id); };
+
+/* ======================================================================
+   SHARED ROW RENDERER — used by tab 1 and by both incident animations
+   ====================================================================== */
+function row(f, now){
+  var cls = 'srow ' + (now ? 'now' : 'seen');
+
+  if (f.kind === 'intro'){
+    return '<div class="' + cls + '"><div class="banner" style="background:#131a26;'
+         + 'border:1px dashed var(--line);color:var(--dim)">'
+         + (f.introText || 'Two requests arrive at the same moment. Time runs downward.')
+         + '</div></div>';
+  }
+  if (f.kind === 'end'){
+    return '<div class="' + cls + '"><div class="banner ' + (f.bad ? 'b-bad' : 'b-ok') + '">'
+         + f.banner + '</div></div>';
+  }
+
+  var c = COLORS[f.color] || 'var(--cyan)';
+
+  if (f.kind === 'swarm'){
+    var chips = '';
+    for (var i = 0; i < f.count; i++) chips += '<div class="chip ' + f.phase + '"></div>';
+    return '<div class="' + cls + '"><div class="swarm" style="border-color:' + c + '">'
+      + '<span class="cap" style="color:' + c + '">' + f.label + '</span>'
+      + '<div class="chips">' + chips + '</div>'
+      + '<div class="foot">' + f.val + '</div></div></div>';
+  }
+
+  if (f.kind === 'think'){
+    return '<div class="' + cls + '">'
+      + '<div class="think" style="grid-column:' + (f.act === 'A' ? '1' : '3')
+      +      ';border-color:' + c + ';color:' + c + '">'
+      +   '<span class="k">' + (f.thinkNote || 'Request ' + f.act + ' · decided in code, not in the database') + '</span>'
+      +   '<span style="color:var(--txt)">' + f.label + '</span> &nbsp;<b>' + f.val + '</b>'
+      + '</div></div>';
+  }
+
+  // arrow steps: A occupies columns 1-2, B occupies columns 2-3
+  var span        = (f.act === 'A') ? '1 / 3' : '2 / 4';
+  var toDb        = (f.dir === 'put');
+  var pointsRight = (f.act === 'A') ? toDb : !toDb;
+  var blocked     = (f.kind === 'blocked');
+  var cls2        = blocked ? 'stop left' : (pointsRight ? 'right' : 'left');
+
+  return '<div class="' + cls + '">'
+    + '<div class="ar ' + cls2 + '" style="grid-column:' + span + ';color:' + c + '">'
+    +   '<span class="lbl">' + f.label + '</span>'
+    +   '<div class="ln"></div>'
+    +   '<span class="val">' + f.val + '</span>'
+    + '</div></div>';
+}
+
+/* ======================================================================
+   TAB 1 — THE FLOW
+   ====================================================================== */
+var FLOWS = {
+
+/* ------------------------------- BROKEN ------------------------------- */
+vulnerable: [
+{
+  kind:'intro',
+  say:'Alice has exactly $100 left. She taps “Withdraw $100” on her phone — and her laptop, still logged in, sends the same request 8 milliseconds later.',
+  why:'Two requests. One row. Nothing coordinating them. Watch what each request <b>believes</b> against what the database actually holds.',
+  cue:'Ask the room before you start: how much money does she get? Show of hands for $100 vs $200.',
+  s:S(100, null, null, 0)
+},
+{
+  act:'A', kind:'read', dir:'get', color:'cyan',
+  label:'SELECT Balance WHERE Id = 1', val:'gets $100',
+  say:'Request A asks the database how much is there. The answer is $100.',
+  why:'That $100 is now a <b>copy living inside Request A</b>. The database handed it over and immediately forgot this request exists — nothing is reserved and nothing is locked.',
+  cue:'Point at the middle lane, then the left one. “The truth is here. A now holds a photocopy.”',
+  sql:'<span class="c">-- Request A</span>\nSELECT TOP(1) [Id], [Owner], [Balance] FROM [Wallets] WHERE [Id] = 1;',
+  s:S(100, 100, null, 0)
+},
+{
+  act:'B', kind:'read', dir:'get', color:'vio',
+  label:'SELECT Balance WHERE Id = 1', val:'gets $100',
+  say:'Request B asks the same question — and is told the same thing. $100.',
+  why:'Nothing has been written yet, so B is told the truth as it stands. <b>Both requests now believe they own the same $100.</b> This is the moment the bug is created — not later, at the write.',
+  cue:'This is the key frame. Pause here. “Both of them are holding the same hundred dollars, and neither can tell.”',
+  sql:'<span class="c">-- Request B, on a different connection</span>\nSELECT TOP(1) [Id], [Owner], [Balance] FROM [Wallets] WHERE [Id] = 1;',
+  s:S(100, 100, 100, 0)
+},
+{
+  act:'A', kind:'think', color:'cyan',
+  label:'Is $100 enough for a $100 withdrawal?', val:'yes → allow',
+  say:'Request A checks whether there is enough money. Its copy says $100, so yes.',
+  why:'This check runs in C#, against the copy. It never asks the database anything.',
+  sql:'<span class="c">-- no SQL at all. This runs inside your application.</span>\nif (wallet.Balance &lt; amount) return BadRequest();',
+  s:S(100, 100, 100, 0)
+},
+{
+  act:'B', kind:'think', color:'vio',
+  label:'Is $100 enough for a $100 withdrawal?', val:'yes → allow',
+  say:'Request B runs the same check on its own copy. Also yes.',
+  why:'The same guard has now approved the same $100 <b>twice</b>. A guard is only as good as the freshness of the value it guards.',
+  cue:'“The insufficient-funds check just passed twice for one hundred dollars.”',
+  sql:'<span class="c">-- same check, same stale value, same answer</span>\nif (wallet.Balance &lt; amount) return BadRequest();',
+  s:S(100, 100, 100, 0)
+},
+{
+  act:'A', kind:'write', dir:'put', color:'grn',
+  label:'UPDATE SET Balance = 0 WHERE Id = 1', val:'1 row changed · $100 paid',
+  say:'Request A hands Alice $100 and tells the database the new balance is zero.',
+  why:'Read the statement literally: <b>set the balance to zero</b>. Not “subtract 100”, and not “only if it is still 100”. It is an absolute number that A worked out in C# from its copy.',
+  cue:'Read the UPDATE out loud, word for word. The absoluteness is the whole point.',
+  sql:'<span class="c">-- Request A</span>\nUPDATE [Wallets] SET [Balance] = <span class="hl">0</span>\nWHERE <span class="hl">[Id] = 1</span>;\n<span class="c">-- 1 row affected · HTTP 200 OK</span>',
+  s:S(0, 0, 100, 100, { bTag:'stale' })
+},
+{
+  act:'B', kind:'write', dir:'put', color:'red',
+  label:'UPDATE SET Balance = 0 WHERE Id = 1', val:'1 row changed · $100 paid',
+  say:'Request B hands Alice another $100 and writes zero as well — the number it worked out from a copy that went stale two steps ago.',
+  why:'It quietly overwrites A\'s result with an identical value. <b>The database is perfectly happy: 1 row affected, no error.</b> This is a lost update, and READ COMMITTED explicitly permits it.',
+  cue:'“Same statement, byte for byte. The database has no way to know this one is wrong.”',
+  sql:'<span class="c">-- Request B — byte for byte the same statement</span>\nUPDATE [Wallets] SET [Balance] = <span class="hl">0</span>\nWHERE <span class="hl">[Id] = 1</span>;\n<span class="c">-- 1 row affected  ← no error, no warning, nothing to alert on</span>',
+  s:S(0, 0, 0, 200)
+},
+{
+  kind:'end', bad:true,
+  banner:'<b>$200 walked out of a $100 wallet.</b> Two HTTP 200s. Zero exceptions. Zero log lines.',
+  say:'Alice received $200 from a wallet that held $100.',
+  why:'Both requests returned success. Your error rate is 0%, your dashboard is green, and $100 that never existed has left the building.',
+  cue:'Close with: “Every other bug you ship pages you. This one does not. You find it at month-end close.”',
+  s:S(0, 0, 0, 200),
+  verdict:{ bad:true, html:
+    '<b>Nothing here will ever alert you.</b><br>'+
+    'No exception was thrown, no log line was written, both responses were 200 OK. The only '+
+    'evidence is a ledger that no longer reconciles — and you find that weeks later, at close.<br><br>'+
+    '<span class="muted">In the demo project, run <span class="mono">concurrency=50</span> and the '+
+    'balance goes <b>negative</b> — from an endpoint whose first line checks for insufficient funds.</span>' }
+}
+],
+
+/* ----------------------------- OPTIMISTIC ----------------------------- */
+optimistic: [
+{
+  kind:'intro',
+  say:'The same two requests. One line of configuration added to the model.',
+  why:'<span class="mono">builder.Property(w =&gt; w.RowVersion).IsRowVersion();</span> — the row now carries a <b>RowVersion</b>: an 8-byte value that SQL Server bumps automatically on <b>every</b> update. You never assign it yourself.',
+  cue:'“The bet here is that collisions are rare. So don\'t pay for a lock — just detect it when it happens.”',
+  s:S(100, null, null, 0, { ver:RV1 })
+},
+{
+  act:'A', kind:'read', dir:'get', color:'cyan',
+  label:'SELECT Balance, RowVersion', val:'$100 · RowVersion ' + RV1,
+  say:'Request A reads the balance and the RowVersion: $100, version ' + RV1 + '.',
+  why:'EF Core keeps that RowVersion as the entry\'s <i>original value</i>. It will use it later, in the WHERE clause of the UPDATE.',
+  sql:'<span class="c">-- Request A</span>\nSELECT TOP(1) [Id], [Owner], [Balance], <span class="hl">[RowVersion]</span>\nFROM [Wallets] WHERE [Id] = 1;\n<span class="c">-- RowVersion = 0x00000000000007D1</span>',
+  s:S(100, 100, null, 0, { ver:RV1, aVer:RV1 })
+},
+{
+  act:'B', kind:'read', dir:'get', color:'vio',
+  label:'SELECT Balance, RowVersion', val:'$100 · RowVersion ' + RV1,
+  say:'Request B reads the same balance and the same RowVersion.',
+  why:'Note what did <b>not</b> happen: this strategy did not stop B reading stale data. It never will. What it buys you is that B will <b>find out</b> before it does any damage.',
+  cue:'Say this explicitly — people assume optimistic concurrency prevents the collision. It does not.',
+  sql:'<span class="c">-- Request B</span>\nSELECT TOP(1) [Id], [Owner], [Balance], <span class="hl">[RowVersion]</span>\nFROM [Wallets] WHERE [Id] = 1;\n<span class="c">-- RowVersion = 0x00000000000007D1  ← same value</span>',
+  s:S(100, 100, 100, 0, { ver:RV1, aVer:RV1, bVer:RV1 })
+},
+{
+  act:'A', kind:'write', dir:'put', color:'grn',
+  label:'UPDATE … WHERE Id = 1 AND RowVersion = ' + RV1, val:'RowVersion matched · $100 paid',
+  say:'Request A writes — but only if the RowVersion is still ' + RV1 + '. It is, so the write lands, and SQL Server bumps the RowVersion to ' + RV2 + '.',
+  why:'That extra condition is the whole fix: <b>“update this row only if it is still the version I read.”</b>',
+  cue:'Read the WHERE clause out loud. That sentence is the entire fix.',
+  sql:'<span class="c">-- Request A — note what EF Core appended</span>\nUPDATE [Wallets] SET [Balance] = 0\nOUTPUT INSERTED.[RowVersion]\nWHERE [Id] = 1 <span class="hl">AND [RowVersion] = 0x00000000000007D1</span>;\n<span class="c">-- 1 row affected · RowVersion is now 0x…07D2</span>',
+  s:S(0, 0, 100, 100, { ver:RV2, aVer:RV2, bVer:RV1, bTag:'stale' })
+},
+{
+  act:'B', kind:'write', dir:'put', color:'amb',
+  label:'UPDATE … WHERE Id = 1 AND RowVersion = ' + RV1, val:'RowVersion stale · 0 rows changed',
+  say:'Request B tries the same thing — but it is still carrying RowVersion ' + RV1 + ', and the row is now at ' + RV2 + '. Nothing matches, so nothing changes.',
+  why:'The database did not throw anything. It simply updated nothing. <b>Noticing that is EF Core\'s job:</b> it expected 1 row, got 0, and raises <span class="mono">DbUpdateConcurrencyException</span>.',
+  cue:'“No money moved. The RowVersion it was holding no longer exists, so the write matched no rows.”',
+  sql:'<span class="c">-- Request B — identical statement, different outcome</span>\nUPDATE [Wallets] SET [Balance] = 0\nWHERE [Id] = 1 <span class="hl">AND [RowVersion] = 0x00000000000007D1</span>;\n<span class="r">-- 0 rows affected  ← the row is at 0x…07D2 now</span>',
+  s:S(0, 0, 100, 100, { ver:RV2, aVer:RV2, bVer:RV1, bTag:'conflict' })
+},
+{
+  kind:'end', bad:false,
+  banner:'<b>$100 out of a $100 wallet. Correct.</b> One 200 OK, one honest 409 Conflict.',
+  say:'Alice got her $100 once. Request B was told the truth instead of silently double-paying.',
+  why:'From here you either surface the 409 (“someone else changed this record”), or retry in a bounded loop that <b>re-reads and re-validates</b> — never just call SaveChanges again.',
+  cue:'Warn them: retrying without re-reading rebuilds the original bug with extra steps.',
+  s:S(0, 0, 100, 100, { ver:RV2, aVer:RV2, bVer:RV1, bTag:'conflict' }),
+  verdict:{ bad:false, html:
+    '<b>Cost when nothing collides: zero.</b><br>'+
+    'No lock is taken and no request ever waits. You only pay on the rare occasion something '+
+    'actually conflicts — which is exactly why it is called optimistic.<br><br>'+
+    '<span class="muted">The trade-off: it degrades as contention rises. Push tab 4 to 100 '+
+    'concurrent requests and watch the conflict bar grow.</span>' }
+}
+],
+
+/* ----------------------------- PESSIMISTIC ---------------------------- */
+pessimistic: [
+{
+  kind:'intro',
+  say:'A different bet: assume collisions are common, or that a retry is unacceptable. So don\'t detect the collision — prevent it.',
+  why:'Request A will take a <b>lock</b> on the row as it reads. While it holds that lock, nobody else can even read the row.',
+  cue:'“Charging a card, moving money, allocating the last seat — sometimes you cannot just retry.”',
+  s:S(100, null, null, 0)
+},
+{
+  act:'A', kind:'lock', dir:'get', color:'vio',
+  label:'BEGIN TRAN · SELECT … WITH (UPDLOCK)', val:'gets $100 · takes the lock',
+  say:'Request A opens a transaction and reads the row — taking a lock on it at the same time.',
+  why:'From now until it commits, <b>row 1 belongs to Request A alone</b>. The lock must be inside an explicit transaction; without one it would be released the instant the SELECT finished.',
+  cue:'Flag the trap: no transaction means no lock held, and you are straight back to the broken version.',
+  sql:'<span class="c">-- Request A</span>\nBEGIN TRANSACTION;\nSELECT [Id], [Owner], [Balance]\nFROM [Wallets] <span class="hl">WITH (UPDLOCK, ROWLOCK)</span>\nWHERE [Id] = 1;',
+  s:S(100, 100, null, 0, { lock:'A' })
+},
+{
+  act:'B', kind:'blocked', dir:'get', color:'amb',
+  label:'SELECT … WITH (UPDLOCK) — waiting on A', val:'BLOCKED · reads nothing',
+  say:'Request B issues the same read — and stops dead.',
+  why:'B is not slow here. B is <b>suspended</b>. It has read nothing, so it is incapable of acting on stale data. That is the difference from every previous version.',
+  cue:'If you have SSMS on a second screen, show sys.dm_exec_requests now: status suspended, blocking_session_id = A.',
+  sql:'<span class="c">-- Request B</span>\nBEGIN TRANSACTION;\nSELECT [Id], [Owner], [Balance]\nFROM [Wallets] WITH (UPDLOCK, ROWLOCK) WHERE [Id] = 1;\n<span class="c">-- waiting on A … status = suspended</span>',
+  s:S(100, 100, null, 0, { lock:'A', bTag:'waiting' })
+},
+{
+  act:'A', kind:'think', color:'vio',
+  label:'Is $100 enough? Nobody else can change it.', val:'yes → allow',
+  say:'Request A checks the balance — and this time the check actually means something.',
+  why:'Nobody can modify the row between this check and the write, because A is holding the lock.',
+  sql:'<span class="c">-- the same C# check as the broken version.</span>\n<span class="c">-- What changed is that the value underneath it cannot move.</span>',
+  s:S(100, 100, null, 0, { lock:'A', bTag:'waiting' })
+},
+{
+  act:'A', kind:'write', dir:'put', color:'grn',
+  label:'UPDATE SET Balance = 0 · COMMIT', val:'$100 paid · lock released',
+  say:'Request A pays out $100, writes zero, and commits — which releases the lock and wakes B up.',
+  why:'Keep this window short. Every millisecond A holds the lock is a millisecond every other request on this row is stopped.',
+  cue:'“This is where you pay for correctness — in latency, not in money.”',
+  sql:'<span class="c">-- Request A</span>\nUPDATE [Wallets] SET [Balance] = 0 WHERE [Id] = 1;\n<span class="g">COMMIT;</span>  <span class="c">-- ← releases the lock</span>',
+  s:S(0, 0, null, 100, { bTag:'waiting' })
+},
+{
+  act:'B', kind:'read', dir:'get', color:'vio',
+  label:'SELECT … finally runs', val:'gets $0.00 — the truth',
+  say:'Request B\'s read finally runs — and returns $0.00, the truth as it now stands.',
+  why:'B never got the chance to read stale data, because it never got the chance to read.',
+  cue:'This is the payoff frame. “It waited, and what it got was the truth.”',
+  sql:'<span class="c">-- Request B, resumed</span>\nSELECT [Id], [Owner], [Balance]\nFROM [Wallets] WITH (UPDLOCK, ROWLOCK) WHERE [Id] = 1;\n<span class="c">-- Balance = 0.00  ← fresh, not stale</span>',
+  s:S(0, 0, 0, 100, { lock:'B' })
+},
+{
+  kind:'end', bad:false,
+  banner:'<b>$100 out of a $100 wallet. Correct.</b> One 200 OK, one honest “insufficient funds”.',
+  say:'Request B checks $0 against a $100 withdrawal, declines it honestly, and rolls back.',
+  why:'No retry, no exception handling, no conflict for the caller to interpret. The bill is throughput: B waited for A, and at scale that shows up in your p99 and your connection pool.',
+  cue:'Footnote for the seniors: two rows locked in inconsistent order deadlock. Always lock in primary-key order.',
+  s:S(0, 0, 0, 100),
+  verdict:{ bad:false, html:
+    '<b>Correctness is guaranteed. Throughput is the price.</b><br>'+
+    'Every request on this row now runs one at a time. On a hot row that is a hard ceiling.<br><br>'+
+    '<span class="muted">And two rows locked in inconsistent order will deadlock — SQL Server '+
+    'picks a victim and raises error 1205. Always acquire locks in the same order; sorting by '+
+    'primary key is the cheapest total order you have.</span>' }
+}
+],
+
+/* ------------------------------- ATOMIC ------------------------------- */
+atomic: [
+{
+  kind:'intro',
+  say:'Before reaching for either of those — ask whether you need to read the row at all.',
+  why:'If the whole operation fits in <b>one statement</b>, there is no gap between reading and writing, so there is nothing to race in.',
+  cue:'“This is the fix nobody puts on the slide, and it is usually the right one for a balance.”',
+  s:S(100, null, null, 0)
+},
+{
+  act:'A', kind:'write', dir:'put', color:'grn',
+  label:'UPDATE SET Balance = Balance − 100 WHERE Balance ≥ 100', val:'1 row changed · $100 paid',
+  say:'Request A sends one statement: “subtract $100, but only if there is at least $100 there.”',
+  why:'Two things changed. <b>Balance − 100 is relative</b>, so no stale number ever leaves your process. And <b>the business rule is in the WHERE clause</b>, so the database decides — not a copy in your memory.',
+  cue:'Contrast with the broken version: that one said “set it to zero”. This one says “subtract”. And notice neither lane above ever holds a copy.',
+  sql:'<span class="c">-- Request A</span>\nUPDATE [Wallets]\nSET [Balance] = <span class="hl">[Balance] - 100</span>\nWHERE [Id] = 1 <span class="hl">AND [Balance] &gt;= 100</span>;\n<span class="c">-- 1 row affected · HTTP 200 OK</span>',
+  s:S(0, null, null, 100, { aTag:'paid' })
+},
+{
+  act:'B', kind:'write', dir:'put', color:'amb',
+  label:'UPDATE SET Balance = Balance − 100 WHERE Balance ≥ 100', val:'0 rows changed · nothing paid',
+  say:'Request B sends the identical statement. The balance is now $0, so the condition fails and nothing changes.',
+  why:'<b>rowsAffected == 0 is your business answer</b>: rejected, insufficient funds. And that answer came from the row itself, not from a value read 40 milliseconds ago.',
+  cue:'“No exception, no retry, no lock held across your C#. One round trip each.”',
+  sql:'<span class="c">-- Request B — identical statement</span>\nUPDATE [Wallets]\nSET [Balance] = [Balance] - 100\nWHERE [Id] = 1 <span class="hl">AND [Balance] &gt;= 100</span>;\n<span class="r">-- 0 rows affected → "Insufficient funds"</span>\n\n<span class="c">// EF Core 7+</span>\nvar rows = await db.Wallets\n    .Where(w =&gt; w.Id == id <span class="hl">&amp;&amp; w.Balance &gt;= amount</span>)\n    .ExecuteUpdateAsync(s =&gt; s.SetProperty(\n        w =&gt; w.Balance, w =&gt; <span class="hl">w.Balance - amount</span>));',
+  s:S(0, null, null, 100, { aTag:'paid', bTag:'rejected' })
+},
+{
+  kind:'end', bad:false,
+  banner:'<b>$100 out of a $100 wallet. Correct — and the cheapest of the four.</b>',
+  say:'Three steps instead of seven — and look at the two side lanes: neither request ever held a copy of the balance.',
+  why:'No copy means no stale copy, which means nothing to race over. What you give up: <span class="mono">ExecuteUpdate</span> bypasses the change tracker — no navigation fix-up, no SaveChanges interceptors, no domain events. Know the trade.',
+  cue:'“If your operation fits this shape — balances, counters, stock, quotas — this is the right default.”',
+  s:S(0, null, null, 100, { aTag:'paid', bTag:'rejected' }),
+  verdict:{ bad:false, html:
+    '<b>One round trip. No retry loop. No lock spanning your application code.</b><br>'+
+    'This only works when the new value is a pure function of the old one — but that covers '+
+    'most balance, counter, stock-level and quota operations you will ever write.' }
+}
+]
+};
+
+/* ======================================================================
+   TAB 1 RENDERING
+   ====================================================================== */
+var flow = [], idx = 0, timer = null, showSql = false, showCue = false;
+
+function load(){
+  flow = FLOWS[el('mode').value];
+  idx = 0;
+  render();
+}
+
+function render(){
+  var f = flow[idx], s = f.s;
+
+  el('counter').textContent = idx + ' / ' + (flow.length - 1);
+  el('stepno').textContent =
+      f.kind === 'intro' ? 'The setup'
+    : f.kind === 'end'   ? 'Result'
+    : 'Step ' + idx + ' of ' + (flow.length - 1);
+  el('say').innerHTML = f.say;
+  el('why').innerHTML = f.why || '';
+
+  el('cue').style.display = (showCue && f.cue) ? 'block' : 'none';
+  el('cue').innerHTML = f.cue ? '<b>Say this →</b> ' + f.cue : '';
+  el('sqlbox').style.display = (showSql && f.sql) ? 'block' : 'none';
+  el('sqlbox').innerHTML = f.sql || '';
+
+  var gap = s.paid - (START - s.db);
+  el('scStart').textContent = money(START);
+  el('scPaid').textContent  = money(s.paid);
+  el('scDb').textContent    = money(s.db);
+  el('scGap').textContent   = money(gap);
+  el('scGapBox').className  = 'sc' + (gap > 0 ? ' bad' : (idx === flow.length - 1 ? ' good' : ''));
+  el('scPaidBox').className = 'sc' + (gap > 0 ? ' bad' : '');
+  el('scGap').style.color   = gap > 0 ? 'var(--red)' : 'var(--txt)';
+  el('scDb').style.color    = s.db < 0 ? 'var(--red)' : 'var(--txt)';
+
+  hold('A', s.a, s.aTag, s.lock === 'A', s.aVer);
+  hold('B', s.b, s.bTag, s.lock === 'B', s.bVer);
+  el('hD').innerHTML = money(s.db)
+    + (s.ver  ? ' <span class="tag t-lock">RowVersion ' + s.ver + '</span>' : '')
+    + (s.lock ? ' <span class="tag t-lock">locked by ' + s.lock + '</span>' : '');
+  el('hD').style.color = s.db < 0 ? 'var(--red)' : 'var(--txt)';
+
+  var out = '';
+  for (var i = 0; i <= idx; i++) out += row(flow[i], i === idx);
+  el('rows').innerHTML = out;
+
+  el('verdict').innerHTML = f.verdict
+    ? '<div class="verdict ' + (f.verdict.bad ? 'v-bad' : 'v-ok') + '">' + f.verdict.html + '</div>'
+    : '';
+
+  el('step').disabled = idx >= flow.length - 1;
+
+  var last = el('rows').lastElementChild;
+  if (last && idx > 0) last.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+function hold(k, v, tag, locked, ver){
+  var t = '';
+  if (tag === 'stale')    t += ' <span class="tag t-stale">STALE COPY</span>';
+  if (tag === 'conflict') t += ' <span class="tag t-stale">409 CONFLICT</span>';
+  if (tag === 'waiting')  t += ' <span class="tag t-wait">BLOCKED</span>';
+  if (tag === 'rejected') t += ' <span class="tag t-wait">REJECTED</span>';
+  if (tag === 'paid')     t += ' <span class="tag t-ok">PAID</span>';
+  if (locked)             t += ' <span class="tag t-lock">holds the lock</span>';
+
+  var plain = 'font-size:14px;font-family:-apple-system,sans-serif';
+  var blank = tag === 'waiting'  ? 'has read nothing yet'
+            : tag === 'rejected' ? 'never held a copy'
+            : tag === 'paid'     ? 'never held a copy'
+            : 'not started';
+  var vTag = ver
+    ? ' <span class="tag ' + (tag === 'stale' || tag === 'conflict' ? 't-stale' : 't-lock')
+      + '">RowVersion ' + ver + '</span>'
+    : '';
+  var txt = (v === null || v === undefined)
+    ? '<span class="muted" style="' + plain + '">' + blank + '</span>'
+    : 'holds ' + money(v) + vTag;
+
+  el('h' + k).innerHTML = txt + t;
+  el('h' + k).style.color = (tag === 'stale' || tag === 'conflict') ? 'var(--red)' : 'var(--txt)';
+}
+
+function next(){ if (idx < flow.length - 1){ idx++; render(); } else stop(); }
+function stop(){ if (timer){ clearInterval(timer); timer = null; el('play').textContent = 'Auto-play'; } }
+
+el('mode').onchange = function(){ stop(); load(); };
+el('step').onclick  = function(){ stop(); next(); };
+el('reset').onclick = function(){ stop(); load(); };
+el('play').onclick  = function(){
+  if (timer){ stop(); return; }
+  if (idx >= flow.length - 1) idx = 0;
+  this.textContent = 'Pause';
+  timer = setInterval(next, 3400);
+  next();
+};
+el('tSql').onclick = function(){ showSql = !showSql; this.classList.toggle('on', showSql); render(); };
+el('tCue').onclick = function(){ showCue = !showCue; this.classList.toggle('on', showCue); render(); };
+if (SHOW_CUE_BUTTON){ el('tCue').style.display = ''; showCue = true; el('tCue').classList.add('on'); }
+
+document.addEventListener('keydown', function(e){
+  if (!el('sim').classList.contains('on')) return;
+  if (e.code === 'Space'){ e.preventDefault(); stop(); next(); }
+  if (e.key === 'r' || e.key === 'R'){ stop(); load(); }
+  if (e.key === 'c' || e.key === 'C'){ showCue = !showCue; render(); }  // hidden toggle
+});
+load();
+
+/* ======================================================================
+   GENERIC PLAYER — drives both incident animations on tab 2
+   ====================================================================== */
+function Player(p, cfg){
+  var i = 0, t = null, flow = cfg.flow;
+  var $ = function(sfx){ return document.getElementById(p + sfx); };
+
+  function draw(){
+    var f = flow[i], s = f.s;
+    $('cnt').textContent = i + ' / ' + (flow.length - 1);
+    $('no').textContent  = f.kind === 'intro' ? 'The setup'
+                         : f.kind === 'end'   ? 'What it cost'
+                         : 'Step ' + i + ' of ' + (flow.length - 1);
+    $('say').innerHTML = f.say;
+    $('why').innerHTML = f.why || '';
+
+    $('score').innerHTML = cfg.scores.map(function(sc){
+      var bad = sc.bad && sc.bad(s);
+      return '<div class="sc' + (bad ? ' bad' : '') + '"><div class="l">' + sc.l + '</div>'
+           + '<div class="v"' + (bad ? ' style="color:var(--red)"' : '') + '>' + sc.f(s) + '</div></div>';
+    }).join('');
+
+    var h = cfg.head(s);
+    $('hA').innerHTML = h.a; $('hM').innerHTML = h.m; $('hB').innerHTML = h.b;
+
+    var out = '';
+    for (var k = 0; k <= i; k++) out += row(flow[k], k === i);
+    $('rows').innerHTML = out;
+
+    $('verdict').innerHTML = f.verdict
+      ? '<div class="verdict ' + (f.verdict.bad ? 'v-bad' : 'v-ok') + '">' + f.verdict.html + '</div>'
+      : '';
+    $('step').disabled = i >= flow.length - 1;
+  }
+
+  function fwd(){ if (i < flow.length - 1){ i++; draw(); } else halt(); }
+  function halt(){ if (t){ clearInterval(t); t = null; $('play').textContent = 'Auto-play'; } }
+
+  $('step').onclick  = function(){ halt(); fwd(); };
+  $('reset').onclick = function(){ halt(); i = 0; draw(); };
+  $('play').onclick  = function(){
+    if (t){ halt(); return; }
+    if (i >= flow.length - 1) i = 0;
+    this.textContent = 'Pause';
+    t = setInterval(fwd, 3200);
+    fwd();
+  };
+  draw();
+}
+
+/* ---------------------- STARBUCKS, MAY 2015 ---------------------- */
+/* Two cards, $5 each — $10 in the system. Two concurrent transfers of $5
+   from card 1 to card 2. Both read $5, both pass, both credit, both debit. */
+function C(c1, c2, r1, r2, extra){
+  var o = { c1:c1, c2:c2, r1:r1, r2:r2, t1:null, t2:null };
+  for (var k in (extra || {})) o[k] = extra[k];
+  return o;
+}
+
+Player('sb-', {
+  scores:[
+    { l:'Card 1', f:function(s){ return money(s.c1); } },
+    { l:'Card 2', f:function(s){ return money(s.c2); } },
+    { l:'Total in the system', f:function(s){ return money(s.c1 + s.c2); },
+      bad:function(s){ return s.c1 + s.c2 > 10; } },
+    { l:'Money from nowhere', f:function(s){ return money(s.c1 + s.c2 - 10); },
+      bad:function(s){ return s.c1 + s.c2 > 10; } }
+  ],
+  head:function(s){
+    var side = function(v, tag){
+      if (v === null) return '<span class="muted" style="font-size:14px;font-family:-apple-system,sans-serif">not started</span>';
+      return 'read card 1 = ' + money(v)
+           + (tag === 'stale' ? ' <span class="tag t-stale">STALE COPY</span>' : '');
+    };
+    return {
+      a: side(s.r1, s.t1),
+      m: money(s.c1) + ' / ' + money(s.c2),
+      b: side(s.r2, s.t2)
+    };
+  },
+  flow:[
+  {
+    kind:'intro',
+    introText:'Two browser windows, two session cookies, one gift-card balance. Time runs downward.',
+    say:'He bought gift cards and put $5 on each. Card 1 has $5, card 2 has $5 — $10 in the system.',
+    why:'Then he opened the transfer page in <b>two browsers</b> and fired the same “move $5 from card 1 to card 2” from both at the same moment. That is the entire attack kit.',
+    s:C(5, 5, null, null)
+  },
+  {
+    act:'A', kind:'read', dir:'get', color:'cyan',
+    label:'read card 1 balance', val:'gets $5.00',
+    say:'Browser 1 asks what is on card 1. The server says $5.',
+    why:'The check <span class="mono">if (card1.Balance &lt; 5)</span> will run against this copy, not against the card.',
+    s:C(5, 5, 5, null)
+  },
+  {
+    act:'B', kind:'read', dir:'get', color:'vio',
+    label:'read card 1 balance', val:'gets $5.00',
+    say:'Browser 2 asks the same question a few milliseconds later — and is also told $5.',
+    why:'Neither transfer has been written yet, so both are told the truth. <b>Both requests now believe card 1 can fund a $5 transfer.</b> This is where the money is about to be created.',
+    s:C(5, 5, 5, 5)
+  },
+  {
+    act:'A', kind:'write', dir:'put', color:'grn',
+    label:'card 2 += $5 · card 1 = $0   (one save)', val:'card 2 → $10.00 · card 1 → $0.00',
+    say:'Browser 1\'s transfer commits: it credits card 2 and zeroes card 1, in one save.',
+    why:'So far, so correct. $10 in the system before, $10 after — the money just moved.',
+    s:C(0, 10, 5, 5, { t2:'stale' })
+  },
+  {
+    act:'B', kind:'write', dir:'put', color:'red',
+    label:'card 2 += $5 · card 1 = $0   (one save)', val:'card 2 → $15.00 · card 1 unchanged',
+    say:'Browser 2 commits the identical transfer — and card 2 climbs to $15 while card 1 stays at zero.',
+    why:'Look at why the two halves behave differently. The credit is <b>relative</b> — <span class="mono">card2.Balance += 5</span> applies every time it runs. The debit is <b>absolute</b> — <span class="mono">card1.Balance = 0</span> is the same answer no matter how often it runs. <b>Two credits, one debit. That asymmetry is the exploit.</b>',
+    s:C(0, 15, 5, 5, { t1:'stale', t2:'stale' })
+  },
+  {
+    kind:'end', bad:true,
+    banner:'<b>$15.00 on the cards, from a system that held $10.00.</b> Every request returned success.',
+    say:'He walked into a store and spent $16.70 to confirm the money was real — then topped the card back up to repay it.',
+    why:'Scaled up from two cards to three, the $15 he actually paid became a $20 balance. Reported 23 March; first reply 29 April; Starbucks called it "fraudulent activity".',
+    s:C(0, 15, 5, 5, { t1:'stale', t2:'stale' }),
+    verdict:{ bad:true, html:
+      '<b>The credit was relative. The debit was absolute.</b><br>'+
+      '<span class="mono">card2.Balance += 5</span> applies every time it runs. '+
+      '<span class="mono">card1.Balance = 0</span> is the same answer no matter how many times it runs. '+
+      'Two requests, two credits, one debit — and the difference is real money.<br><br>'+
+      '<span class="muted">Total cost of the exploit: three $5 gift cards and two browser windows.</span>' }
+  }]
+});
+
+/* ---------------------- FLEXCOIN, MARCH 2014 ---------------------- */
+/* Same bug, industrial scale. 40 chips stand in for the thousands of
+   simultaneous requests the attacker actually fired. */
+var FXN = 40, FXAMT = 100;
+function X(src, dest, approved, extra){
+  var o = { src:src, dest:dest, approved:approved };
+  for (var k in (extra || {})) o[k] = extra[k];
+  return o;
+}
+
+Player('fx-', {
+  scores:[
+    { l:'Source account', f:function(s){ return btc(s.src); } },
+    { l:'Transfers approved', f:function(s){ return String(s.approved); },
+      bad:function(s){ return s.approved > 1; } },
+    { l:'BTC credited out', f:function(s){ return btc(s.dest); },
+      bad:function(s){ return s.dest > 100; } },
+    { l:'BTC that never existed', f:function(s){ return btc(Math.max(0, s.dest - (100 - s.src))); },
+      bad:function(s){ return s.dest - (100 - s.src) > 0; } }
+  ],
+  head:function(s){
+    return {
+      a: s.approved
+          ? String(s.approved) + ' requests in flight'
+          : '<span class="muted" style="font-size:14px;font-family:-apple-system,sans-serif">idle</span>',
+      m: btc(s.src) + (s.stale ? ' <span class="tag t-stale">READ BY ALL ' + FXN + '</span>' : ''),
+      b: btc(s.dest) + (s.dest > 100 ? ' <span class="tag t-stale">IMPOSSIBLE</span>' : '')
+    };
+  },
+  flow:[
+  {
+    kind:'intro',
+    introText:'One funded account. Thousands of simultaneous transfer requests. Time runs downward.',
+    say:'The attacker funded one account normally — call it 100 BTC — then pointed thousands of concurrent internal transfers at it.',
+    why:'Same bug as the Starbucks one, industrial scale. The 40 squares below stand in for the flood of simultaneous requests.',
+    s:X(100, 0, 0)
+  },
+  {
+    kind:'swarm', color:'cyan', count:FXN, phase:'read',
+    label:'All ' + FXN + ' requests: SELECT balance FROM source_account',
+    val:'every one of them is told the same thing: 100 BTC available',
+    say:'All of them read the source balance at once — before any of them has written anything.',
+    why:'Nothing is locked and nothing is reserved, so every request gets the same honest answer. <b>Every one now believes it owns the whole 100 BTC.</b>',
+    s:X(100, 0, 0, { stale:true })
+  },
+  {
+    kind:'swarm', color:'amb', count:FXN, phase:'ok',
+    label:'All ' + FXN + ' requests: is 100 BTC ≥ 100 BTC?',
+    val:'all ' + FXN + ' pass the "do you have enough?" check',
+    say:'Every request runs the balance check against its own copy — and every single one passes.',
+    why:'The guard is not broken. It is answering a question about a value that stopped being true the moment the first transfer committed.',
+    s:X(100, 0, FXN, { stale:true })
+  },
+  {
+    kind:'swarm', color:'red', count:FXN, phase:'done',
+    label:'All ' + FXN + ' requests: credit destination, then debit source',
+    val:FXN + ' × 100 BTC credited out · source debited exactly once',
+    say:'Each transfer credits its destination. The source only decrements once.',
+    why:'<b>' + btc(FXN * FXAMT) + ' credited out of a ' + btc(FXAMT) + ' balance.</b> Repeat against other accounts and the hot wallet is empty.',
+    s:X(0, FXN * FXAMT, FXN)
+  },
+  {
+    kind:'end', bad:true,
+    banner:'<b>896 BTC drained — around $600,000 at the time.</b> Flexcoin closed permanently two days later.',
+    say:'The company had no capital to absorb the loss and shut down on 4 March 2014.',
+    why:'Cold-storage holders were refunded after ID checks. Hot-wallet holders were not. The same week, Poloniex lost 12.3% of its bitcoin to a withdrawal race.',
+    s:X(0, FXN * FXAMT, FXN),
+    verdict:{ bad:true, html:
+      '<b>Starbucks lost pocket change. Flexcoin stopped existing.</b><br>'+
+      'Same bug, same shape, same two-line fix — a token in the WHERE clause, or a lock hint. '+
+      'What differed was how much money was sitting behind the endpoint.<br><br>'+
+      '<span class="muted">This was not an exotic attack in 2014, and it is not one now.</span>' }
+  }]
+});
+
+/* ======================================================================
+   TAB 4 — genuine discrete-event simulation
+   ====================================================================== */
+function simulate(mode, n, start, amount){
+  var balance = start, version = 0, res = { ok:0, conflict:0, rejected:0, per:[] }, i;
+
+  if (mode === 'pessimistic' || mode === 'atomic'){
+    for (i = 0; i < n; i++){
+      if (balance >= amount){ balance -= amount; res.ok++; res.per.push('ok'); }
+      else { res.rejected++; res.per.push('rj'); }
+    }
+    return { balance:balance, res:res };
+  }
+
+  var events = [];
+  for (i = 0; i < n; i++)
+    events.push({ id:i, t:Math.random() * 100, type:'read', snap:null, ver:null, attempts:0 });
+
+  var out = new Array(n).fill(null), guard = 0;
+  while (events.length && guard++ < 20000){
+    events.sort(function(a, b){ return a.t - b.t; });
+    var e = events.shift();
+
+    if (e.type === 'read'){
+      e.snap = balance; e.ver = version; e.type = 'write';
+      e.t = e.t + 60 + Math.random() * 60;          // the vulnerability window
+      events.push(e);
+      continue;
+    }
+    if (e.snap < amount){ res.rejected++; out[e.id] = 'rj'; continue; }
+
+    if (mode === 'vulnerable'){
+      balance = e.snap - amount; version++; res.ok++; out[e.id] = 'ok';
+    } else if (e.ver === version){
+      balance = e.snap - amount; version++; res.ok++; out[e.id] = 'ok';
+    } else if (mode === 'optimistic-retry' && e.attempts < 5){
+      e.attempts++; e.type = 'read';
+      e.t = e.t + Math.pow(2, e.attempts) * 3 + Math.random() * 8;
+      events.push(e);
+    } else {
+      res.conflict++; out[e.id] = 'cf';
+    }
+  }
+  res.per = out.map(function(x){ return x || 'cf'; });
+  return { balance:balance, res:res };
+}
+
+el('run').onclick = function(){
+  var n = Math.max(2, Math.min(200, +el('n').value));
+  var start = +el('start').value, amount = +el('amt').value;
+
+  var modes = [
+    { k:'vulnerable',       t:'❌ Broken — no lock, no token' },
+    { k:'optimistic',       t:'✅ Optimistic — RowVersion, fail fast' },
+    { k:'optimistic-retry', t:'✅ Optimistic + bounded retry' },
+    { k:'pessimistic',      t:'✅ Pessimistic — WITH (UPDLOCK)' },
+    { k:'atomic',           t:'✅ Atomic — single UPDATE' }
+  ];
+
+  var html = '';
+  modes.forEach(function(m){
+    var s = simulate(m.k, n, start, amount);
+    var claimed = s.res.ok * amount, moved = start - s.balance, phantom = claimed - moved;
+    var broken = phantom !== 0 || s.balance < 0;
+
+    html += '<div class="card" style="margin-bottom:13px;border-color:' + (broken ? 'var(--red)' : 'var(--line)') + '">'
+      + '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;align-items:baseline">'
+      +   '<b style="font-size:15px">' + m.t + '</b>'
+      +   '<span class="mono" style="font-size:13px">final balance <b style="color:'
+      +     (s.balance < 0 ? 'var(--red)' : 'var(--txt)') + '">' + money(s.balance) + '</b></span>'
+      + '</div>'
+      + '<div class="dots">' + s.res.per.map(function(x){ return '<div class="dot ' + x + '"></div>'; }).join('') + '</div>'
+      + '<div class="bars">'
+      +   '<span>200 OK</span><div class="bar"><i style="width:' + (100 * s.res.ok / n) + '%;background:var(--grn)"></i></div><span class="mono">' + s.res.ok + '</span>'
+      +   '<span>409 Conflict</span><div class="bar"><i style="width:' + (100 * s.res.conflict / n) + '%;background:var(--amb)"></i></div><span class="mono">' + s.res.conflict + '</span>'
+      +   '<span>400 Rejected</span><div class="bar"><i style="width:' + (100 * s.res.rejected / n) + '%;background:#64748b"></i></div><span class="mono">' + s.res.rejected + '</span>'
+      + '</div>'
+      + '<div style="margin-top:11px;font-size:13.5px;color:' + (broken ? 'var(--red)' : 'var(--grn)') + '">'
+      +   (broken
+            ? '<b>BROKEN.</b> The API confirmed ' + s.res.ok + ' withdrawals worth ' + money(claimed)
+              + ', but only ' + money(moved) + ' actually left the wallet. <b>' + money(phantom)
+              + ' created from nothing.</b>'
+            : '<b>CORRECT.</b> ' + s.res.ok + ' withdrawals confirmed, ' + money(moved)
+              + ' debited. Every unit accounted for.')
+      + '</div></div>';
+  });
+
+  el('results').innerHTML = html
+    + '<div class="note">Green = 200 OK · amber = 409 Conflict · grey = 400 rejected. '
+    + 'Run it again — the interleaving is random, so the counts change every time. The verdict never does.<br><br>'
+    + '<b>Worth pausing on:</b> optimistic + retry still leaves some 409s at high concurrency — the retry '
+    + 'budget (5 attempts, same as the demo project) runs out. That is not a flaw in the simulation, it is '
+    + 'the real trade-off: optimistic concurrency degrades as contention rises. Push the request count to 100 '
+    + 'and watch the conflict bar grow. <i>That</i> is the moment you switch to pessimistic or atomic.</div>';
+};
+el('run').click();
+</script>
+</body>
+</html>
